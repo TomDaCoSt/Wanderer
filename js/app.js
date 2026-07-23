@@ -117,10 +117,12 @@ export function rerender() {
   navigateTo(currentView);
 }
 
-// =====================================================
-// APP INIT
-// =====================================================
-async function init() {
+let appBooted = false;
+
+async function bootApp() {
+  if (appBooted) return;
+  appBooted = true;
+
   initTheme();
   initNav();
   navigateTo('dashboard');
@@ -134,6 +136,13 @@ async function init() {
       rerender();
     }
   } catch (e) {}
+}
+
+// =====================================================
+// APP INIT
+// =====================================================
+async function init() {
+  await bootApp();
 }
 
 document.addEventListener('DOMContentLoaded', init);
