@@ -1,14 +1,28 @@
 /* =====================================================
    DASHBOARD.JS — Home View
    ===================================================== */
-import { appData, commitData, rerender } from '../app.js';
+import { appData, commitData, currentUser, refreshData, rerender } from '../app.js';
 import { openModal, openConfirm, showToast } from '../utils/modal.js';
-import { saveData, resetData, genId, getSyncCode, setSyncCode, pullFromCloud, pushToCloud } from '../data.js';
+import {
+  createProject,
+  deleteProject,
+  getActiveProjectId,
+  getProjects,
+  pullFromCloud,
+  pushToCloud,
+  renameProject,
+  resetData,
+  saveData,
+  setActiveProject,
+} from '../data.js';
+import { logout } from '../auth.js';
 
 export function renderDashboard(container) {
   const data     = appData;
   const trip     = data.trip     || {};
   const settings = data.settings || {};
+  const projects = getProjects();
+  const activeProjectId = getActiveProjectId();
 
   // Countdown
   const today     = new Date();
@@ -84,18 +98,31 @@ export function renderDashboard(container) {
         </div>
       </div>
 
-      <!-- Cloud Sync Banner -->
+      <!-- Account + Projects -->
       <div class="card" style="margin-bottom:var(--sp-4);padding:var(--sp-3) var(--sp-4);background:linear-gradient(135deg, rgba(59,130,246,0.1), rgba(34,197,94,0.1));border:1px solid rgba(59,130,246,0.25);display:flex;align-items:center;justify-content:space-between">
-        <div style="display:flex;align-items:center;gap:0.6rem">
-          <span style="font-size:1.2rem;color:var(--color-info)">☁️</span>
+        <div style="display:flex;align-items:center;gap:0.9rem;flex-wrap:wrap">
+          <span style="font-size:1.2rem;color:var(--color-info)">👤</span>
           <div>
-            <div style="font-size:var(--fs-xs);font-weight:700;color:var(--text-primary)">Synchronisation Cloud Multi-Appareils</div>
-            <div style="font-size:0.68rem;color:var(--text-muted)">Code unique : <strong style="color:var(--color-success);font-size:0.75rem">${getSyncCode()}</strong></div>
+            <div style="font-size:var(--fs-xs);font-weight:700;color:var(--text-primary)">${currentUser?.name || 'Compte Google'}</div>
+            <div style="font-size:0.68rem;color:var(--text-muted)">${currentUser?.email || ''}</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:0.4rem;min-width:280px">
+            <select id="project-select" class="input" style="height:32px;padding:0 0.5rem;min-width:180px">
+              ${projects.map((project) => `<option value="${project.id}" ${project.id === activeProjectId ? 'selected' : ''}>${project.name}</option>`).join('')}
+            </select>
+            <button class="btn btn-ghost btn-sm" id="add-project-btn" title="Créer un projet"><i class="fa-solid fa-plus"></i></button>
+            <button class="btn btn-ghost btn-sm" id="rename-project-btn" title="Renommer le projet"><i class="fa-solid fa-pen"></i></button>
+            <button class="btn btn-ghost btn-sm" id="delete-project-btn" title="Supprimer le projet"><i class="fa-solid fa-trash"></i></button>
           </div>
         </div>
-        <button class="btn btn-ghost btn-sm" id="cloud-sync-btn" style="color:var(--color-info);border:1px solid rgba(59,130,246,0.3)">
-          <i class="fa-solid fa-sync"></i> Gérer
-        </button>
+        <div style="display:flex;gap:0.4rem;align-items:center">
+          <button class="btn btn-ghost btn-sm" id="cloud-sync-btn" style="color:var(--color-info);border:1px solid rgba(59,130,246,0.3)">
+            <i class="fa-solid fa-cloud-arrow-up"></i> Sync
+          </button>
+          <button class="btn btn-ghost btn-sm" id="logout-btn">
+            <i class="fa-solid fa-right-from-bracket"></i> Déconnexion
+          </button>
+        </div>
       </div>
 
       <!-- Countdown -->
@@ -265,37 +292,86 @@ export function renderDashboard(container) {
     }
   });
 
-  // Cloud Sync button
-  document.getElementById('cloud-sync-btn')?.addEventListener('click', () => {
-    const currentCode = getSyncCode();
+  document.getElementById('logout-btn')?.addEventListener('click', () => {
+    logout();
+  });
+
+  document.getElementById('project-select')?.addEventListener('change', (event) => {
+    const projectId = event.target.value;
+    setActiveProject(projectId);
+    refreshData();
+    rerender();
+    showToast('Projet chargé.', 'success');
+  });
+
+  document.getElementById('add-project-btn')?.addEventListener('click', () => {
     openModal({
-      title: '☁️ Synchronisation Cloud Multi-Appareils',
+      title: '➕ Nouveau projet',
       fields: [
-        { key: 'syncCode', label: 'Code de synchronisation', type: 'text', required: true, hint: 'Partagez ce code avec votre téléphone ou vos compagnons de voyage.' },
+        { key: 'name', label: 'Nom du projet', type: 'text', required: true, placeholder: 'Voyage Corée 2027' },
       ],
-      data: { syncCode: currentCode },
-      onSave(d) {
-        if (d.syncCode && d.syncCode.trim() !== currentCode) {
-          setSyncCode(d.syncCode);
-          showToast('Connexion au Code Cloud...', 'info');
-          pullFromCloud().then(cloudData => {
-            if (cloudData && cloudData.trip) {
-              Object.assign(appData, cloudData);
-              saveData(appData);
-              rerender();
-              showToast('Données synchronisées depuis le Cloud ! ☁️', 'success');
-            } else {
-              pushToCloud(appData);
-              rerender();
-              showToast('Nouveau Code lié et sauvegardé sur le Cloud ! ☁️', 'success');
-            }
-          });
-        } else {
-          pushToCloud(appData);
-          showToast('Données synchronisées sur le Cloud ! ☁️', 'success');
-        }
+      data: { name: 'Nouveau projet' },
+      onSave(formData) {
+        const projectName = (formData.name || '').trim() || 'Nouveau projet';
+        createProject(projectName);
+        refreshData();
+        rerender();
+        showToast('Projet créé.', 'success');
       },
     });
+  });
+
+  document.getElementById('rename-project-btn')?.addEventListener('click', () => {
+    const active = getProjects().find((project) => project.id === getActiveProjectId());
+    if (!active) return;
+
+    openModal({
+      title: '✏️ Renommer le projet',
+      fields: [
+        { key: 'name', label: 'Nom du projet', type: 'text', required: true },
+      ],
+      data: { name: active.name },
+      onSave(formData) {
+        renameProject(active.id, formData.name);
+        refreshData();
+        rerender();
+        showToast('Projet renommé.', 'success');
+      },
+    });
+  });
+
+  document.getElementById('delete-project-btn')?.addEventListener('click', async () => {
+    const active = getProjects().find((project) => project.id === getActiveProjectId());
+    if (!active) return;
+    if (getProjects().length <= 1) {
+      showToast('Vous devez conserver au moins un projet.', 'warning');
+      return;
+    }
+
+    const ok = await openConfirm(`Supprimer le projet "${active.name}" ?`, 'Suppression');
+    if (!ok) return;
+    deleteProject(active.id);
+    refreshData();
+    rerender();
+    showToast('Projet supprimé.', 'success');
+  });
+
+  // Cloud Sync button
+  document.getElementById('cloud-sync-btn')?.addEventListener('click', () => {
+    showToast('Synchronisation en cours...', 'info');
+    pushToCloud(appData)
+      .then(() => pullFromCloud())
+      .then((cloudData) => {
+        if (cloudData && cloudData.trip) {
+          Object.assign(appData, cloudData);
+          saveData(appData);
+          rerender();
+        }
+        showToast('Synchronisation terminée ☁️', 'success');
+      })
+      .catch(() => {
+        showToast('Échec de la synchronisation cloud.', 'error');
+      });
   });
 }
 

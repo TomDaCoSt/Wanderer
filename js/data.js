@@ -3,7 +3,7 @@
    Japan Travel Dashboard
    ===================================================== */
 
-const STORAGE_KEY = 'voyage_japon_data';
+const WORKSPACE_STORAGE_KEY = 'voyage_workspace_v1';
 
 // =====================================================
 // DEFAULT SAMPLE DATA
@@ -321,236 +321,246 @@ const DEFAULT_DATA = {
 };
 
 // =====================================================
-// DATA LAYER — localStorage CRUD
+// DATA LAYER — local projects + authenticated cloud sync
 // =====================================================
 
-/** Load data from localStorage, falling back to defaults */
-export function loadData() {
+function cloneDefaults() {
+  return JSON.parse(JSON.stringify(DEFAULT_DATA));
+}
+
+function createDefaultProject() {
+  return {
+    id: 'project-default',
+    name: DEFAULT_DATA.trip?.name || 'Mon voyage',
+    updatedAt: new Date().toISOString(),
+    data: cloneDefaults(),
+  };
+}
+
+function createDefaultWorkspace() {
+  const project = createDefaultProject();
+  return {
+    version: 1,
+    activeProjectId: project.id,
+    projects: [project],
+  };
+}
+
+function normalizeWorkspace(rawWorkspace) {
+  if (!rawWorkspace || typeof rawWorkspace !== 'object') return createDefaultWorkspace();
+  const projects = Array.isArray(rawWorkspace.projects)
+    ? rawWorkspace.projects
+      .filter((project) => project && typeof project === 'object' && project.id && project.data)
+      .map((project) => ({
+        id: project.id,
+        name: project.name || project.data?.trip?.name || 'Projet voyage',
+        updatedAt: project.updatedAt || new Date().toISOString(),
+        data: project.data,
+      }))
+    : [];
+
+  if (!projects.length) return createDefaultWorkspace();
+
+  const activeProjectId = projects.some((project) => project.id === rawWorkspace.activeProjectId)
+    ? rawWorkspace.activeProjectId
+    : projects[0].id;
+
+  return {
+    version: 1,
+    activeProjectId,
+    projects,
+  };
+}
+
+function readLocalWorkspace() {
   try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) {
-      const parsed = JSON.parse(stored);
-      // Auto-migrate if version is outdated or missing
-      if (parsed.version === DEFAULT_DATA.version) {
-        return parsed;
-      }
-    }
-  } catch (e) { /* ignore parse errors */ }
-
-  // Save new default data if version upgraded or missing
-  const freshData = JSON.parse(JSON.stringify(DEFAULT_DATA));
-  saveData(freshData);
-  return freshData;
+    const stored = localStorage.getItem(WORKSPACE_STORAGE_KEY);
+    if (!stored) return createDefaultWorkspace();
+    return normalizeWorkspace(JSON.parse(stored));
+  } catch (error) {
+    return createDefaultWorkspace();
+  }
 }
 
-/** Save entire data object to localStorage and trigger cloud sync */
+function persistWorkspace(workspace) {
+  localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(workspace));
+}
+
+function loadWorkspace() {
+  const workspace = readLocalWorkspace();
+  persistWorkspace(workspace);
+  return workspace;
+}
+
+function updateWorkspace(mutator) {
+  const workspace = loadWorkspace();
+  const nextWorkspace = normalizeWorkspace(mutator(workspace) || workspace);
+  persistWorkspace(nextWorkspace);
+  return nextWorkspace;
+}
+
+function buildProjectId() {
+  return `project-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+export function getProjects() {
+  const workspace = loadWorkspace();
+  return workspace.projects.map((project) => ({
+    id: project.id,
+    name: project.name,
+    updatedAt: project.updatedAt,
+  }));
+}
+
+export function getActiveProjectId() {
+  return loadWorkspace().activeProjectId;
+}
+
+export function setActiveProject(projectId) {
+  updateWorkspace((workspace) => ({
+    ...workspace,
+    activeProjectId: workspace.projects.some((project) => project.id === projectId)
+      ? projectId
+      : workspace.activeProjectId,
+  }));
+}
+
+export function createProject(name = 'Nouveau projet') {
+  const workspace = updateWorkspace((currentWorkspace) => {
+    const newProject = {
+      id: buildProjectId(),
+      name,
+      updatedAt: new Date().toISOString(),
+      data: cloneDefaults(),
+    };
+    return {
+      ...currentWorkspace,
+      activeProjectId: newProject.id,
+      projects: [newProject, ...currentWorkspace.projects],
+    };
+  });
+
+  void pushWorkspaceToCloud(workspace);
+  return workspace.activeProjectId;
+}
+
+export function renameProject(projectId, nextName) {
+  const trimmedName = (nextName || '').trim();
+  if (!trimmedName) return;
+
+  const workspace = updateWorkspace((currentWorkspace) => ({
+    ...currentWorkspace,
+    projects: currentWorkspace.projects.map((project) => (
+      project.id === projectId ? { ...project, name: trimmedName, updatedAt: new Date().toISOString() } : project
+    )),
+  }));
+
+  void pushWorkspaceToCloud(workspace);
+}
+
+export function deleteProject(projectId) {
+  const workspace = updateWorkspace((currentWorkspace) => {
+    if (currentWorkspace.projects.length <= 1) return currentWorkspace;
+
+    const nextProjects = currentWorkspace.projects.filter((project) => project.id !== projectId);
+    if (!nextProjects.length) return currentWorkspace;
+
+    const nextActive = currentWorkspace.activeProjectId === projectId
+      ? nextProjects[0].id
+      : currentWorkspace.activeProjectId;
+
+    return {
+      ...currentWorkspace,
+      activeProjectId: nextActive,
+      projects: nextProjects,
+    };
+  });
+
+  void pushWorkspaceToCloud(workspace);
+}
+
+/** Load active project data from localStorage, falling back to defaults */
+export function loadData() {
+  const workspace = loadWorkspace();
+  const activeProject = workspace.projects.find((project) => project.id === workspace.activeProjectId);
+  return activeProject?.data || cloneDefaults();
+}
+
+/** Save active project and trigger authenticated cloud sync */
 export function saveData(data) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  pushToCloud(data);
+  const workspace = updateWorkspace((currentWorkspace) => ({
+    ...currentWorkspace,
+    projects: currentWorkspace.projects.map((project) => (
+      project.id === currentWorkspace.activeProjectId
+        ? {
+          ...project,
+          name: data.trip?.name || project.name,
+          updatedAt: new Date().toISOString(),
+          data,
+        }
+        : project
+    )),
+  }));
+
+  void pushWorkspaceToCloud(workspace);
 }
 
-/** Reset to default data */
+/** Reset active project to default data */
 export function resetData() {
-  localStorage.removeItem(STORAGE_KEY);
-  const fresh = JSON.parse(JSON.stringify(DEFAULT_DATA));
+  const fresh = cloneDefaults();
   saveData(fresh);
   return fresh;
 }
 
-// =====================================================
-// REAL-TIME FREE CLOUD SYNC MODULE (jsonblob API)
-// -----------------------------------------------------
-// The sync code is only a shared lookup key. The actual
-// JSONBlob id is stored in a shared registry blob so every
-// device can resolve the same cloud payload.
-// =====================================================
-
-const SYNC_CODE_KEY = 'voyage_sync_code';
-const SYNC_REGISTRY_CACHE_KEY = 'voyage_sync_registry';
-const SYNC_REGISTRY_BLOB_ID = '019f8e15-bcd3-7ad0-a344-3c3616c7b94a';
-const API_BASE = 'https://jsonblob.com/api/jsonBlob';
-
-function normalizeSyncCode(code) {
-  return (code || '').trim().toUpperCase();
-}
-
-function getBlobIdCacheKey(code) {
-  return 'voyage_blob_id_' + code;
-}
-
-function createEmptySyncRegistry() {
-  return { version: 1, blobs: {} };
-}
-
-function readSyncRegistryCache() {
+async function pushWorkspaceToCloud(workspace) {
   try {
-    const stored = localStorage.getItem(SYNC_REGISTRY_CACHE_KEY);
-    if (!stored) return createEmptySyncRegistry();
-    const parsed = JSON.parse(stored);
-    if (parsed && typeof parsed === 'object' && parsed.blobs && typeof parsed.blobs === 'object') {
-      return { version: 1, blobs: { ...parsed.blobs } };
-    }
-  } catch (e) {
-    // Fall back to an empty cache if the registry cache is corrupt.
-  }
-  return createEmptySyncRegistry();
-}
-
-function saveSyncRegistryCache(registry) {
-  localStorage.setItem(SYNC_REGISTRY_CACHE_KEY, JSON.stringify(registry));
-}
-
-function getCachedBlobId(code) {
-  return localStorage.getItem(getBlobIdCacheKey(code));
-}
-
-function cacheBlobId(code, blobId) {
-  localStorage.setItem(getBlobIdCacheKey(code), blobId);
-}
-
-function extractBlobIdFromLocation(res) {
-  const location = res.headers.get('Location') || res.headers.get('location') || res.headers.get('X-jsonblob-id');
-  if (!location) return null;
-  return location.split('/').filter(Boolean).pop() || null;
-}
-
-function normalizeRegistryPayload(payload) {
-  if (!payload || typeof payload !== 'object' || !payload.blobs || typeof payload.blobs !== 'object') {
-    return createEmptySyncRegistry();
-  }
-
-  return {
-    version: 1,
-    blobs: { ...payload.blobs },
-  };
-}
-
-async function readSyncRegistry() {
-  const cached = readSyncRegistryCache();
-
-  try {
-    const res = await fetch(`${API_BASE}/${SYNC_REGISTRY_BLOB_ID}`);
-    if (!res.ok) return cached;
-
-    const remote = normalizeRegistryPayload(await res.json());
-    const merged = {
-      version: 1,
-      blobs: { ...cached.blobs, ...remote.blobs },
-    };
-
-    saveSyncRegistryCache(merged);
-    return merged;
-  } catch (e) {
-    console.warn('Cloud sync registry read error:', e);
-  }
-
-  return cached;
-}
-
-async function writeSyncRegistry(registry) {
-  const res = await fetch(`${API_BASE}/${SYNC_REGISTRY_BLOB_ID}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(registry),
-  });
-
-  if (!res.ok) {
-    throw new Error(`Unable to update sync registry (${res.status})`);
-  }
-
-  saveSyncRegistryCache(registry);
-}
-
-export function getSyncCode() {
-  let code = localStorage.getItem(SYNC_CODE_KEY);
-  if (!code) {
-    code = 'JAPON-2026-' + Math.random().toString(36).substring(2, 7).toUpperCase();
-    localStorage.setItem(SYNC_CODE_KEY, code);
-  }
-  return code;
-}
-
-export function setSyncCode(newCode) {
-  const formatted = normalizeSyncCode(newCode);
-  localStorage.setItem(SYNC_CODE_KEY, formatted);
-  return formatted;
-}
-
-/** Push current appData to the Cloud */
-export async function pushToCloud(data) {
-  try {
-    const code = normalizeSyncCode(getSyncCode());
-    if (!code) return false;
-
-    const registry = await readSyncRegistry();
-    let blobId = registry.blobs[code] || getCachedBlobId(code);
-
-    if (blobId) {
-      const res = await fetch(`${API_BASE}/${blobId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-      });
-      if (res.ok) {
-        cacheBlobId(code, blobId);
-        return true;
-      }
-    }
-
-    // Create new blob if none exists or update failed
-    const res = await fetch(API_BASE, {
-      method: 'POST',
+    const res = await fetch('/api/projects', {
+      method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
+      body: JSON.stringify({ workspace }),
     });
-
-    if (res.ok) {
-      const newBlobId = extractBlobIdFromLocation(res);
-      if (newBlobId) {
-        cacheBlobId(code, newBlobId);
-        const nextRegistry = {
-          version: 1,
-          blobs: { ...registry.blobs, [code]: newBlobId },
-        };
-        await writeSyncRegistry(nextRegistry);
-        return true;
-      }
-    }
-  } catch (e) {
-    console.warn('Cloud sync push error:', e);
+    return res.ok;
+  } catch (error) {
+    console.warn('Cloud workspace push error:', error);
+    return false;
   }
-  return false;
 }
 
-/** Pull latest appData from the Cloud */
+/** Push current active project data to authenticated cloud workspace */
+export async function pushToCloud(data) {
+  const workspace = updateWorkspace((currentWorkspace) => ({
+    ...currentWorkspace,
+    projects: currentWorkspace.projects.map((project) => (
+      project.id === currentWorkspace.activeProjectId
+        ? {
+          ...project,
+          name: data.trip?.name || project.name,
+          updatedAt: new Date().toISOString(),
+          data,
+        }
+        : project
+    )),
+  }));
+  return pushWorkspaceToCloud(workspace);
+}
+
+/** Pull full workspace from authenticated cloud and update local storage */
 export async function pullFromCloud() {
   try {
-    const code = normalizeSyncCode(getSyncCode());
-    if (!code) return null;
+    const res = await fetch('/api/projects', { method: 'GET' });
+    if (!res.ok) return null;
 
-    const registry = await readSyncRegistry();
-    const blobId = registry.blobs[code] || getCachedBlobId(code);
-    if (!blobId) return null;
+    const payload = await res.json();
+    if (!payload || !payload.workspace) return null;
 
-    const res = await fetch(`${API_BASE}/${blobId}`);
-    if (res.ok) {
-      const data = await res.json();
-      if (data && data.trip) {
-        cacheBlobId(code, blobId);
-        if (registry.blobs[code] !== blobId) {
-          const nextRegistry = {
-            version: 1,
-            blobs: { ...registry.blobs, [code]: blobId },
-          };
-          await writeSyncRegistry(nextRegistry);
-        }
-        return data;
-      }
-    }
-  } catch (e) {
-    console.warn('Cloud sync pull error:', e);
+    const workspace = normalizeWorkspace(payload.workspace);
+    persistWorkspace(workspace);
+    const activeProject = workspace.projects.find((project) => project.id === workspace.activeProjectId);
+    return activeProject?.data || null;
+  } catch (error) {
+    console.warn('Cloud workspace pull error:', error);
+    return null;
   }
-  return null;
 }
 
 /** Generate a short unique ID */

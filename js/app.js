@@ -3,7 +3,8 @@
    Japan Travel Dashboard
    ===================================================== */
 
-import { loadData, saveData, pullFromCloud, pushToCloud } from './data.js';
+import { loadData, saveData, pullFromCloud } from './data.js';
+import { getCurrentUser, refreshCurrentUser } from './auth.js';
 import { renderDashboard  } from './views/dashboard.js';
 import { renderFlights    } from './views/flights.js';
 import { renderMap        } from './views/map.js';
@@ -19,9 +20,15 @@ const APP_BUILD = '2026.07.23-1';
 // =====================================================
 let currentView = 'dashboard';
 export let appData = loadData();
+export let currentUser = getCurrentUser();
 
 export function refreshData() {
   appData = loadData();
+}
+
+export async function refreshUser() {
+  currentUser = await refreshCurrentUser();
+  return currentUser;
 }
 
 // =====================================================
@@ -132,6 +139,13 @@ async function bootApp() {
   if (appBooted) return;
   appBooted = true;
 
+  const user = await refreshUser();
+  if (!user) {
+    const returnTo = encodeURIComponent(`${window.location.pathname}${window.location.search}`);
+    window.location.href = `/api/auth/google/login?returnTo=${returnTo}`;
+    return;
+  }
+
   updateVersionBadge();
   initTheme();
   initNav();
@@ -142,10 +156,12 @@ async function bootApp() {
     const cloudData = await pullFromCloud();
     if (cloudData && cloudData.trip) {
       Object.assign(appData, cloudData);
-      localStorage.setItem('voyage_japon_data', JSON.stringify(appData));
+      saveData(appData);
       rerender();
     }
-  } catch (e) {}
+  } catch (e) {
+    console.warn('Initial cloud sync failed:', e);
+  }
 }
 
 // =====================================================

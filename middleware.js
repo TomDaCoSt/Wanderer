@@ -1,51 +1,51 @@
-const PROTECTED_PATHS = ['/'];
+import { SESSION_COOKIE_NAME, parseCookies, verifySessionToken } from './api/_lib/session.js';
 
-function unauthorized() {
-  return new Response('Authentication required', {
-    status: 401,
-    headers: {
-      'WWW-Authenticate': 'Basic realm="Wanderer", charset="UTF-8"',
-      'Cache-Control': 'no-store',
-    },
-  });
+const PUBLIC_PATHS = [
+  '/api/auth/google/login',
+  '/api/auth/google/callback',
+];
+
+function isPublicAsset(pathname) {
+  return pathname.startsWith('/css/')
+    || pathname.startsWith('/js/')
+    || pathname === '/manifest.json'
+    || pathname === '/sw.js'
+    || pathname === '/favicon.ico';
 }
 
-function parseBasicAuth(header) {
-  if (!header || !header.startsWith('Basic ')) return null;
+function redirectToLogin(request) {
+  const currentUrl = new URL(request.url);
+  const loginUrl = new URL('/api/auth/google/login', currentUrl.origin);
+  loginUrl.searchParams.set('returnTo', `${currentUrl.pathname}${currentUrl.search}`);
 
-  const decoded = atob(header.slice(6));
-  const separator = decoded.indexOf(':');
-  if (separator === -1) return null;
-
-  return {
-    username: decoded.slice(0, separator),
-    password: decoded.slice(separator + 1),
-  };
+  return Response.redirect(loginUrl, 302);
 }
 
-export function middleware(request) {
+export async function middleware(request) {
   const { pathname } = new URL(request.url);
-  const username = process.env.VERCEL_AUTH_USER;
-  const password = process.env.VERCEL_AUTH_PASSWORD;
 
-  if (!username || !password) {
-    return new Response('Auth not configured', {
+  if (isPublicAsset(pathname) || PUBLIC_PATHS.includes(pathname)) {
+    return;
+  }
+
+  if (pathname.startsWith('/api/')) {
+    return;
+  }
+
+  const secret = process.env.SESSION_SECRET;
+  if (!secret) {
+    return new Response('SESSION_SECRET is not configured', {
       status: 500,
       headers: { 'Cache-Control': 'no-store' },
     });
   }
 
-  const isProtected = PROTECTED_PATHS.some((path) => pathname === path);
-  if (!isProtected) return;
+  const cookies = parseCookies(request.headers.get('cookie') || '');
+  const token = cookies[SESSION_COOKIE_NAME];
+  if (!token) return redirectToLogin(request);
 
-  const credentials = parseBasicAuth(request.headers.get('authorization'));
-  if (!credentials) return unauthorized();
-
-  if (credentials.username !== username || credentials.password !== password) {
-    return unauthorized();
-  }
+  const session = await verifySessionToken(token, secret);
+  if (!session) return redirectToLogin(request);
 }
 
-export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
-};
+export const config = { matcher: ['/((?!_next/static|_next/image).*)'] };
