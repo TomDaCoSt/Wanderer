@@ -442,10 +442,7 @@ export async function pullFromCloud() {
 
     const remoteWorkspace = normalizeWorkspace(payload.workspace);
     const remoteUpdatedAt = getMostRecentUpdatedAt(remoteWorkspace);
-
-    const localActiveProject = localWorkspace.projects.find((p) => p.id === localWorkspace.activeProjectId);
     const remoteActiveProject = remoteWorkspace.projects.find((p) => p.id === remoteWorkspace.activeProjectId);
-    const localHasData = hasMeaningfulData(localActiveProject?.data);
     const remoteHasData = hasMeaningfulData(remoteActiveProject?.data);
 
     // Local a des données, cloud est vide → on push le local vers le cloud
@@ -481,6 +478,7 @@ export async function pullFromCloud() {
     return null;
   }
 }
+
 
 /** Generate a short unique ID */
 export function genId(prefix = 'id') {
