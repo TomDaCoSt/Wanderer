@@ -359,9 +359,107 @@ export function resetData() {
 
 // =====================================================
 // REAL-TIME FREE CLOUD SYNC MODULE (jsonblob API)
+// -----------------------------------------------------
+// The sync code is only a shared lookup key. The actual
+// JSONBlob id is stored in a shared registry blob so every
+// device can resolve the same cloud payload.
 // =====================================================
+
 const SYNC_CODE_KEY = 'voyage_sync_code';
-const API_BASE      = 'https://jsonblob.com/api/jsonBlob';
+const SYNC_REGISTRY_CACHE_KEY = 'voyage_sync_registry';
+const SYNC_REGISTRY_BLOB_ID = '019f8e15-bcd3-7ad0-a344-3c3616c7b94a';
+const API_BASE = 'https://jsonblob.com/api/jsonBlob';
+
+function normalizeSyncCode(code) {
+  return (code || '').trim().toUpperCase();
+}
+
+function getBlobIdCacheKey(code) {
+  return 'voyage_blob_id_' + code;
+}
+
+function createEmptySyncRegistry() {
+  return { version: 1, blobs: {} };
+}
+
+function readSyncRegistryCache() {
+  try {
+    const stored = localStorage.getItem(SYNC_REGISTRY_CACHE_KEY);
+    if (!stored) return createEmptySyncRegistry();
+    const parsed = JSON.parse(stored);
+    if (parsed && typeof parsed === 'object' && parsed.blobs && typeof parsed.blobs === 'object') {
+      return { version: 1, blobs: { ...parsed.blobs } };
+    }
+  } catch (e) {
+    // Fall back to an empty cache if the registry cache is corrupt.
+  }
+  return createEmptySyncRegistry();
+}
+
+function saveSyncRegistryCache(registry) {
+  localStorage.setItem(SYNC_REGISTRY_CACHE_KEY, JSON.stringify(registry));
+}
+
+function getCachedBlobId(code) {
+  return localStorage.getItem(getBlobIdCacheKey(code));
+}
+
+function cacheBlobId(code, blobId) {
+  localStorage.setItem(getBlobIdCacheKey(code), blobId);
+}
+
+function extractBlobIdFromLocation(res) {
+  const location = res.headers.get('Location') || res.headers.get('location') || res.headers.get('X-jsonblob-id');
+  if (!location) return null;
+  return location.split('/').filter(Boolean).pop() || null;
+}
+
+function normalizeRegistryPayload(payload) {
+  if (!payload || typeof payload !== 'object' || !payload.blobs || typeof payload.blobs !== 'object') {
+    return createEmptySyncRegistry();
+  }
+
+  return {
+    version: 1,
+    blobs: { ...payload.blobs },
+  };
+}
+
+async function readSyncRegistry() {
+  const cached = readSyncRegistryCache();
+
+  try {
+    const res = await fetch(`${API_BASE}/${SYNC_REGISTRY_BLOB_ID}`);
+    if (!res.ok) return cached;
+
+    const remote = normalizeRegistryPayload(await res.json());
+    const merged = {
+      version: 1,
+      blobs: { ...cached.blobs, ...remote.blobs },
+    };
+
+    saveSyncRegistryCache(merged);
+    return merged;
+  } catch (e) {
+    console.warn('Cloud sync registry read error:', e);
+  }
+
+  return cached;
+}
+
+async function writeSyncRegistry(registry) {
+  const res = await fetch(`${API_BASE}/${SYNC_REGISTRY_BLOB_ID}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(registry),
+  });
+
+  if (!res.ok) {
+    throw new Error(`Unable to update sync registry (${res.status})`);
+  }
+
+  saveSyncRegistryCache(registry);
+}
 
 export function getSyncCode() {
   let code = localStorage.getItem(SYNC_CODE_KEY);
@@ -373,7 +471,7 @@ export function getSyncCode() {
 }
 
 export function setSyncCode(newCode) {
-  const formatted = newCode.trim().toUpperCase();
+  const formatted = normalizeSyncCode(newCode);
   localStorage.setItem(SYNC_CODE_KEY, formatted);
   return formatted;
 }
@@ -381,9 +479,11 @@ export function setSyncCode(newCode) {
 /** Push current appData to the Cloud */
 export async function pushToCloud(data) {
   try {
-    const code = getSyncCode();
-    const blobIdKey = 'voyage_blob_id_' + code;
-    let blobId = localStorage.getItem(blobIdKey);
+    const code = normalizeSyncCode(getSyncCode());
+    if (!code) return false;
+
+    const registry = await readSyncRegistry();
+    let blobId = registry.blobs[code] || getCachedBlobId(code);
 
     if (blobId) {
       const res = await fetch(`${API_BASE}/${blobId}`, {
@@ -391,7 +491,10 @@ export async function pushToCloud(data) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
       });
-      if (res.ok) return true;
+      if (res.ok) {
+        cacheBlobId(code, blobId);
+        return true;
+      }
     }
 
     // Create new blob if none exists or update failed
@@ -402,10 +505,14 @@ export async function pushToCloud(data) {
     });
 
     if (res.ok) {
-      const location = res.headers.get('Location');
-      if (location) {
-        const newBlobId = location.split('/').pop();
-        localStorage.setItem(blobIdKey, newBlobId);
+      const newBlobId = extractBlobIdFromLocation(res);
+      if (newBlobId) {
+        cacheBlobId(code, newBlobId);
+        const nextRegistry = {
+          version: 1,
+          blobs: { ...registry.blobs, [code]: newBlobId },
+        };
+        await writeSyncRegistry(nextRegistry);
         return true;
       }
     }
@@ -418,15 +525,27 @@ export async function pushToCloud(data) {
 /** Pull latest appData from the Cloud */
 export async function pullFromCloud() {
   try {
-    const code = getSyncCode();
-    const blobIdKey = 'voyage_blob_id_' + code;
-    const blobId = localStorage.getItem(blobIdKey);
+    const code = normalizeSyncCode(getSyncCode());
+    if (!code) return null;
+
+    const registry = await readSyncRegistry();
+    const blobId = registry.blobs[code] || getCachedBlobId(code);
     if (!blobId) return null;
 
     const res = await fetch(`${API_BASE}/${blobId}`);
     if (res.ok) {
       const data = await res.json();
-      if (data && data.trip) return data;
+      if (data && data.trip) {
+        cacheBlobId(code, blobId);
+        if (registry.blobs[code] !== blobId) {
+          const nextRegistry = {
+            version: 1,
+            blobs: { ...registry.blobs, [code]: blobId },
+          };
+          await writeSyncRegistry(nextRegistry);
+        }
+        return data;
+      }
     }
   } catch (e) {
     console.warn('Cloud sync pull error:', e);
