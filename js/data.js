@@ -4,6 +4,7 @@
    ===================================================== */
 
 const WORKSPACE_STORAGE_KEY = 'voyage_workspace_v1';
+const LEGACY_STORAGE_KEY = 'voyage_japon_data';
 
 // =====================================================
 // DEFAULT SAMPLE DATA
@@ -84,19 +85,57 @@ function normalizeWorkspace(rawWorkspace) {
   };
 }
 
+function migrateLegacyData() {
+  try {
+    const stored = localStorage.getItem(LEGACY_STORAGE_KEY);
+    if (!stored) return null;
+
+    const legacyData = JSON.parse(stored);
+    if (!legacyData || typeof legacyData !== 'object') return null;
+
+    const migratedWorkspace = {
+      version: 1,
+      activeProjectId: 'project-default',
+      projects: [{
+        id: 'project-default',
+        name: legacyData.trip?.name || 'Mon voyage',
+        updatedAt: new Date().toISOString(),
+        data: legacyData,
+      }],
+    };
+
+    localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(migratedWorkspace));
+    localStorage.removeItem(LEGACY_STORAGE_KEY);
+    return migratedWorkspace;
+  } catch (error) {
+    return null;
+  }
+}
+
 function readLocalWorkspace() {
   try {
     const stored = localStorage.getItem(WORKSPACE_STORAGE_KEY);
-    if (!stored) return createDefaultWorkspace();
+    if (!stored) {
+      const migrated = migrateLegacyData();
+      if (migrated) return ensureActiveProject(normalizeWorkspace(migrated));
+      return createDefaultWorkspace();
+    }
     return ensureActiveProject(normalizeWorkspace(JSON.parse(stored)));
   } catch (error) {
+    const migrated = migrateLegacyData();
+    if (migrated) return ensureActiveProject(normalizeWorkspace(migrated));
     return createDefaultWorkspace();
   }
 }
 
 function persistWorkspace(workspace) {
   const normalized = ensureActiveProject(normalizeWorkspace(workspace));
+  const activeProject = normalized.projects.find((project) => project.id === normalized.activeProjectId);
+
   localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(normalized));
+  if (activeProject) {
+    localStorage.setItem(LEGACY_STORAGE_KEY, JSON.stringify(activeProject.data));
+  }
 }
 
 function loadWorkspace() {
