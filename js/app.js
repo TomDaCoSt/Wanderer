@@ -140,6 +140,7 @@ async function bootApp() {
   if (appBooted) return;
   appBooted = true;
 
+  // 1. Vérifier la session utilisateur
   const user = await refreshUser();
   if (!user) {
     const returnTo = encodeURIComponent(`${window.location.pathname}${window.location.search}`);
@@ -150,19 +151,100 @@ async function bootApp() {
   updateVersionBadge();
   initTheme();
   initNav();
-  navigateTo('dashboard');
 
-  // Asynchronously check cloud for updates on startup
+  // 2. Afficher un loader pendant la sync cloud initiale
+  showSyncLoader();
+
   try {
+    // 3. Pull cloud EN PREMIER, avant le rendu initial
     const cloudData = await pullFromCloud();
-    if (cloudData && cloudData.trip) {
+    if (cloudData) {
       Object.assign(appData, cloudData);
-      saveData(appData);
-      rerender();
+      // persistWorkspace() est déjà appelé dans pullFromCloud()
     }
   } catch (e) {
-    console.warn('Initial cloud sync failed:', e);
+    console.warn('[boot] Initial cloud sync failed:', e);
+    // Continuer avec les données locales si le cloud est inaccessible
+  } finally {
+    hideSyncLoader();
   }
+
+  // 4. Rendu final avec les données fraîches (cloud ou local)
+  navigateTo('dashboard');
+
+  // 5. Re-sync automatique quand l'utilisateur revient sur l'onglet
+  setupVisibilitySync();
+}
+
+/** Affiche un overlay de chargement pendant la sync cloud initiale */
+function showSyncLoader() {
+  if (document.getElementById('sync-loader')) return;
+  const loader = document.createElement('div');
+  loader.id = 'sync-loader';
+  loader.style.cssText = [
+    'position:fixed',
+    'inset:0',
+    'z-index:9999',
+    'background:var(--bg-primary,#0f172a)',
+    'display:flex',
+    'align-items:center',
+    'justify-content:center',
+    'flex-direction:column',
+    'gap:14px',
+    'font-family:inherit',
+    'color:var(--text-secondary,#94a3b8)',
+    'font-size:14px',
+    'transition:opacity 0.3s',
+  ].join(';');
+  loader.innerHTML = `
+    <div style="
+      width:36px;height:36px;
+      border:3px solid rgba(255,255,255,0.08);
+      border-top-color:#6366f1;
+      border-radius:50%;
+      animation:_spin 0.75s linear infinite;
+    "></div>
+    <span>Synchronisation en cours…</span>
+    <style>@keyframes _spin{to{transform:rotate(360deg)}}</style>
+  `;
+  document.body.appendChild(loader);
+}
+
+/** Masque et supprime l'overlay de chargement */
+function hideSyncLoader() {
+  const loader = document.getElementById('sync-loader');
+  if (!loader) return;
+  loader.style.opacity = '0';
+  setTimeout(() => loader.remove(), 300);
+}
+
+/** Re-sync en arrière-plan quand l'utilisateur revient sur l'onglet */
+function setupVisibilitySync() {
+  let lastSyncAt = Date.now();
+  const MIN_SYNC_INTERVAL_MS = 30_000; // 30 secondes minimum entre deux syncs automatiques
+
+  document.addEventListener('visibilitychange', async () => {
+    if (document.visibilityState !== 'visible') return;
+
+    const now = Date.now();
+    if (now - lastSyncAt < MIN_SYNC_INTERVAL_MS) return;
+    lastSyncAt = now;
+
+    try {
+      const cloudData = await pullFromCloud();
+      if (cloudData) {
+        const prevJson = JSON.stringify(appData);
+        Object.assign(appData, cloudData);
+        // Re-render seulement si les données ont réellement changé
+        if (JSON.stringify(appData) !== prevJson) {
+          console.info('[sync] Nouvelles données cloud détectées → mise à jour de l\'affichage');
+          rerender();
+        }
+      }
+    } catch (e) {
+      // Silencieux — ne pas perturber l'utilisateur avec une erreur de sync en arrière-plan
+    }
+  });
 }
 
 // =====================================================

@@ -1,0 +1,14 @@
+# Dépendances Node
+node_modules/
+
+# Variables d'environnement (NE JAMAIS committer)
+.env
+.env.local
+.env.*.local
+
+# Cache Vercel
+.vercel/
+
+# Fichiers système
+.DS_Store
+Thumbs.db

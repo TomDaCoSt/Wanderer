@@ -1,63 +1,20 @@
-const API_BASE = 'https://jsonblob.com/api/jsonBlob';
-const REGISTRY_BLOB_ID = '019fe77f-4b2a-7ef0-9fbf-8ec55817d281';
+// api/_lib/projectStore.js
+// Stockage des workspaces utilisateur via Upstash Redis (recommandé par Vercel)
+// Nécessite les variables d'env : UPSTASH_REDIS_REST_URL et UPSTASH_REDIS_REST_TOKEN
+import { Redis } from '@upstash/redis';
 
-function createEmptyRegistry() {
-  return { version: 1, users: {} };
-}
+const KV_PREFIX = 'workspace:';
+const KV_TTL_SECONDS = 60 * 60 * 24 * 365; // 1 an
 
-function normalizeRegistry(payload) {
-  if (!payload || typeof payload !== 'object' || !payload.users || typeof payload.users !== 'object') {
-    return createEmptyRegistry();
-  }
-  return { version: 1, users: { ...payload.users } };
-}
+// Le client Redis est initialisé automatiquement depuis les variables d'environnement
+// UPSTASH_REDIS_REST_URL et UPSTASH_REDIS_REST_TOKEN
+const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN,
+});
 
-function extractBlobIdFromLocation(res) {
-  const location = res.headers.get('Location') || res.headers.get('location') || res.headers.get('X-jsonblob-id');
-  if (!location) return null;
-  return location.split('/').filter(Boolean).pop() || null;
-}
-
-async function readRegistry() {
-  const res = await fetch(`${API_BASE}/${REGISTRY_BLOB_ID}`);
-  if (!res.ok) return createEmptyRegistry();
-  return normalizeRegistry(await res.json());
-}
-
-async function writeRegistry(registry) {
-  const res = await fetch(`${API_BASE}/${REGISTRY_BLOB_ID}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(registry),
-  });
-  if (!res.ok) {
-    throw new Error(`Unable to update projects registry (${res.status})`);
-  }
-}
-
-async function createBlob(payload) {
-  const res = await fetch(API_BASE, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) {
-    throw new Error(`Unable to create projects blob (${res.status})`);
-  }
-  const blobId = extractBlobIdFromLocation(res);
-  if (!blobId) throw new Error('Unable to resolve new projects blob id');
-  return blobId;
-}
-
-async function writeBlob(blobId, payload) {
-  const res = await fetch(`${API_BASE}/${blobId}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) {
-    throw new Error(`Unable to update projects blob (${res.status})`);
-  }
+function userKey(userId) {
+  return `${KV_PREFIX}${userId}`;
 }
 
 function createDefaultWorkspace() {
@@ -65,45 +22,54 @@ function createDefaultWorkspace() {
     version: 1,
     activeProjectId: '',
     projects: [],
+    updatedAt: new Date().toISOString(),
   };
 }
 
 function normalizeWorkspace(payload) {
   if (!payload || typeof payload !== 'object') return createDefaultWorkspace();
-  const projects = Array.isArray(payload.projects) ? payload.projects.filter((project) => project && typeof project === 'object' && project.id && project.data) : [];
-  const activeProjectId = typeof payload.activeProjectId === 'string' ? payload.activeProjectId : '';
+
+  const projects = Array.isArray(payload.projects)
+    ? payload.projects.filter(
+        (p) => p && typeof p === 'object' && p.id && p.data
+      )
+    : [];
+
   return {
     version: 1,
-    activeProjectId,
+    activeProjectId: typeof payload.activeProjectId === 'string' ? payload.activeProjectId : '',
     projects,
+    updatedAt: payload.updatedAt || new Date().toISOString(),
   };
 }
 
+/**
+ * Charge le workspace d'un utilisateur depuis Upstash Redis.
+ * Retourne un workspace vide si l'utilisateur n'existe pas encore.
+ */
 export async function loadUserWorkspace(userId) {
-  const registry = await readRegistry();
-  const blobId = registry.users[userId];
-  if (!blobId) return createDefaultWorkspace();
-
-  const res = await fetch(`${API_BASE}/${blobId}`);
-  if (!res.ok) return createDefaultWorkspace();
-  return normalizeWorkspace(await res.json());
+  try {
+    const data = await redis.get(userKey(userId));
+    return normalizeWorkspace(data);
+  } catch (error) {
+    console.error('[projectStore] loadUserWorkspace error:', error);
+    return createDefaultWorkspace();
+  }
 }
 
+/**
+ * Sauvegarde le workspace d'un utilisateur dans Upstash Redis.
+ * Le serveur est la source de vérité pour l'horodatage updatedAt.
+ */
 export async function saveUserWorkspace(userId, workspace) {
-  const normalizedWorkspace = normalizeWorkspace(workspace);
-  const registry = await readRegistry();
-  let blobId = registry.users[userId];
+  const normalized = normalizeWorkspace(workspace);
+  normalized.updatedAt = new Date().toISOString(); // Toujours forcer l'horodatage serveur
 
-  if (!blobId) {
-    blobId = await createBlob(normalizedWorkspace);
-    const nextRegistry = {
-      version: 1,
-      users: { ...registry.users, [userId]: blobId },
-    };
-    await writeRegistry(nextRegistry);
-    return normalizedWorkspace;
+  try {
+    await redis.set(userKey(userId), normalized, { ex: KV_TTL_SECONDS });
+    return normalized;
+  } catch (error) {
+    console.error('[projectStore] saveUserWorkspace error:', error);
+    throw error;
   }
-
-  await writeBlob(blobId, normalizedWorkspace);
-  return normalizedWorkspace;
 }

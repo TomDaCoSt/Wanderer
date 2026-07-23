@@ -308,18 +308,48 @@ export function resetData() {
   return fresh;
 }
 
+// File d'attente : évite les requêtes PUT simultanées
+let _syncQueue = Promise.resolve();
+let _pendingWorkspace = null;
+
 async function pushWorkspaceToCloud(workspace) {
-  try {
-    const res = await fetch('/api/projects', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workspace }),
-    });
-    return res.ok;
-  } catch (error) {
-    console.warn('Cloud workspace push error:', error);
-    return false;
-  }
+  _pendingWorkspace = workspace;
+
+  _syncQueue = _syncQueue.then(async () => {
+    if (!_pendingWorkspace) return;
+    const toSync = _pendingWorkspace;
+    _pendingWorkspace = null;
+
+    try {
+      const res = await fetch('/api/projects', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspace: toSync }),
+      });
+      if (res.ok) {
+        console.info('[sync] Workspace synchronisé avec le cloud ✓');
+      } else {
+        console.warn('[sync] Échec push cloud:', res.status);
+      }
+    } catch (error) {
+      console.warn('[sync] Erreur réseau push cloud:', error.message);
+      // Pas de retry agressif — la prochaine modification déclenchera un nouveau push
+    }
+  });
+
+  return _syncQueue;
+}
+
+/** Retourne le updatedAt le plus récent parmi tous les projets du workspace */
+function getMostRecentUpdatedAt(workspace) {
+  if (!workspace?.projects?.length) return null;
+  const dates = workspace.projects
+    .map((p) => p.updatedAt)
+    .filter(Boolean)
+    .map((d) => new Date(d).getTime())
+    .filter((t) => !isNaN(t));
+  if (!dates.length) return null;
+  return new Date(Math.max(...dates)).toISOString();
 }
 
 /** Push current active project data to authenticated cloud workspace */
@@ -344,30 +374,69 @@ export async function pushToCloud(data) {
   return pushWorkspaceToCloud(workspace);
 }
 
-/** Pull full workspace from authenticated cloud and update local storage */
+/** Pull full workspace from authenticated cloud and merge intelligently by updatedAt */
 export async function pullFromCloud() {
   try {
-    const res = await fetch('/api/projects', { method: 'GET' });
+    const localWorkspace = readLocalWorkspace();
+    const localUpdatedAt = getMostRecentUpdatedAt(localWorkspace);
+
+    // Envoi de If-Modified-Since pour éviter le download si rien n'a changé
+    const headers = {};
+    if (localUpdatedAt) {
+      headers['If-Modified-Since'] = new Date(localUpdatedAt).toUTCString();
+    }
+
+    const res = await fetch('/api/projects', { method: 'GET', headers });
+
+    // 304 Not Modified → données locales déjà à jour
+    if (res.status === 304) {
+      console.info('[sync] Cloud non modifié, données locales conservées.');
+      return loadData();
+    }
+
     if (!res.ok) return null;
 
     const payload = await res.json();
-    if (!payload || !payload.workspace) return null;
+    if (!payload?.workspace) return null;
 
     const remoteWorkspace = normalizeWorkspace(payload.workspace);
-    const activeProject = remoteWorkspace.projects.find((project) => project.id === remoteWorkspace.activeProjectId);
-    const remoteData = activeProject?.data || null;
-    const localWorkspace = loadWorkspace();
-    const localActiveProject = localWorkspace.projects.find((project) => project.id === localWorkspace.activeProjectId);
-    const localData = localActiveProject?.data || null;
+    const remoteUpdatedAt = getMostRecentUpdatedAt(remoteWorkspace);
 
-    if (hasMeaningfulData(localData) && !hasMeaningfulData(remoteData)) {
-      return localData;
+    const localActiveProject = localWorkspace.projects.find((p) => p.id === localWorkspace.activeProjectId);
+    const remoteActiveProject = remoteWorkspace.projects.find((p) => p.id === remoteWorkspace.activeProjectId);
+    const localHasData = hasMeaningfulData(localActiveProject?.data);
+    const remoteHasData = hasMeaningfulData(remoteActiveProject?.data);
+
+    // Local a des données, cloud est vide → on push le local vers le cloud
+    if (localHasData && !remoteHasData) {
+      console.info('[sync] Local a des données, cloud vide → push vers cloud');
+      void pushWorkspaceToCloud(localWorkspace);
+      return loadData();
     }
 
-    persistWorkspace(remoteWorkspace);
-    return remoteData;
+    // Cloud plus récent que local → écraser local avec cloud
+    if (remoteUpdatedAt && localUpdatedAt && remoteUpdatedAt > localUpdatedAt) {
+      console.info('[sync] Cloud plus récent → mise à jour locale');
+      persistWorkspace(remoteWorkspace);
+      return remoteActiveProject?.data || null;
+    }
+
+    // Local plus récent que cloud → on push le local vers le cloud
+    if (localUpdatedAt && remoteUpdatedAt && localUpdatedAt > remoteUpdatedAt) {
+      console.info('[sync] Local plus récent → push vers cloud');
+      void pushWorkspaceToCloud(localWorkspace);
+      return loadData();
+    }
+
+    // Cas par défaut : utiliser le cloud s'il a des données
+    if (remoteHasData) {
+      persistWorkspace(remoteWorkspace);
+      return remoteActiveProject?.data || null;
+    }
+
+    return loadData();
   } catch (error) {
-    console.warn('Cloud workspace pull error:', error);
+    console.warn('[sync] Cloud pull error:', error);
     return null;
   }
 }
