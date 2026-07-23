@@ -126,6 +126,7 @@ function initNav() {
 // (call this from views after any mutation)
 // =====================================================
 export function commitData() {
+  appData = JSON.parse(JSON.stringify(appData));
   saveData(appData);
 }
 

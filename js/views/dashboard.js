@@ -93,35 +93,40 @@ export function renderDashboard(container) {
           <div class="view-hd-sub">${trip.startDate ? formatDate(trip.startDate) : ''}${trip.endDate?' → '+formatDate(trip.endDate):''}</div>
         </div>
         <div style="display:flex;gap:var(--sp-2)">
+          <button class="btn btn-ghost btn-sm" id="save-project-btn" title="Sauvegarder immédiatement"><i class="fa-solid fa-floppy-disk"></i> Sauver</button>
           <button class="btn btn-ghost btn-sm" id="edit-trip-btn"><i class="fa-solid fa-pen"></i> Modifier</button>
           <button class="btn btn-ghost btn-sm" id="reset-data-btn" title="Recharger les données par défaut"><i class="fa-solid fa-rotate"></i> Reset</button>
         </div>
       </div>
 
       <!-- Account + Projects -->
-      <div class="card" style="margin-bottom:var(--sp-4);padding:var(--sp-3) var(--sp-4);background:linear-gradient(135deg, rgba(59,130,246,0.1), rgba(34,197,94,0.1));border:1px solid rgba(59,130,246,0.25);display:flex;align-items:center;justify-content:space-between">
-        <div style="display:flex;align-items:center;gap:0.9rem;flex-wrap:wrap">
-          <span style="font-size:1.2rem;color:var(--color-info)">👤</span>
-          <div>
-            <div style="font-size:var(--fs-xs);font-weight:700;color:var(--text-primary)">${currentUser?.name || 'Compte Google'}</div>
-            <div style="font-size:0.68rem;color:var(--text-muted)">${currentUser?.email || ''}</div>
+      <div class="card" style="margin-bottom:var(--sp-4);padding:var(--sp-3) var(--sp-4);background:linear-gradient(135deg, rgba(59,130,246,0.1), rgba(34,197,94,0.1));border:1px solid rgba(59,130,246,0.25);display:flex;flex-direction:column;gap:0.7rem;align-items:stretch">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:0.7rem;flex-wrap:wrap">
+          <div style="display:flex;align-items:center;gap:0.7rem;flex-wrap:wrap;min-width:0">
+            <span style="font-size:1.2rem;color:var(--color-info)">👤</span>
+            <div style="min-width:0">
+              <div style="font-size:var(--fs-xs);font-weight:700;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${currentUser?.name || 'Compte Google'}</div>
+              <div style="font-size:0.68rem;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${currentUser?.email || ''}</div>
+            </div>
           </div>
-          <div style="display:flex;align-items:center;gap:0.4rem;min-width:280px">
-            <select id="project-select" class="input" style="height:32px;padding:0 0.5rem;min-width:180px">
+          <div style="display:flex;gap:0.4rem;align-items:center;flex-wrap:wrap;justify-content:flex-end">
+            <button class="btn btn-ghost btn-sm" id="cloud-sync-btn" style="color:var(--color-info);border:1px solid rgba(59,130,246,0.3)">
+              <i class="fa-solid fa-cloud-arrow-up"></i> Sync
+            </button>
+            <button class="btn btn-ghost btn-sm" id="logout-btn">
+              <i class="fa-solid fa-right-from-bracket"></i> Déconnexion
+            </button>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap;justify-content:space-between">
+          <div style="display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap;flex:1;min-width:0">
+            <select id="project-select" class="input" style="height:32px;padding:0 0.5rem;min-width:0;flex:1;max-width:220px">
               ${projects.map((project) => `<option value="${project.id}" ${project.id === activeProjectId ? 'selected' : ''}>${project.name}</option>`).join('')}
             </select>
             <button class="btn btn-ghost btn-sm" id="add-project-btn" title="Créer un projet"><i class="fa-solid fa-plus"></i></button>
             <button class="btn btn-ghost btn-sm" id="rename-project-btn" title="Renommer le projet"><i class="fa-solid fa-pen"></i></button>
             <button class="btn btn-ghost btn-sm" id="delete-project-btn" title="Supprimer le projet"><i class="fa-solid fa-trash"></i></button>
           </div>
-        </div>
-        <div style="display:flex;gap:0.4rem;align-items:center">
-          <button class="btn btn-ghost btn-sm" id="cloud-sync-btn" style="color:var(--color-info);border:1px solid rgba(59,130,246,0.3)">
-            <i class="fa-solid fa-cloud-arrow-up"></i> Sync
-          </button>
-          <button class="btn btn-ghost btn-sm" id="logout-btn">
-            <i class="fa-solid fa-right-from-bracket"></i> Déconnexion
-          </button>
         </div>
       </div>
 
@@ -279,6 +284,11 @@ export function renderDashboard(container) {
         showToast('Villes mises à jour !', 'success');
       },
     });
+  });
+
+  document.getElementById('save-project-btn')?.addEventListener('click', () => {
+    commitData();
+    showToast('Projet sauvegardé.', 'success');
   });
 
   // Reset data button

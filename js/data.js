@@ -62,12 +62,12 @@ function normalizeWorkspace(rawWorkspace) {
   if (!rawWorkspace || typeof rawWorkspace !== 'object') return createDefaultWorkspace();
   const projects = Array.isArray(rawWorkspace.projects)
     ? rawWorkspace.projects
-      .filter((project) => project && typeof project === 'object' && project.id && project.data)
+      .filter((project) => project && typeof project === 'object' && project.id)
       .map((project) => ({
         id: project.id,
         name: project.name || project.data?.trip?.name || 'Projet voyage',
         updatedAt: project.updatedAt || new Date().toISOString(),
-        data: project.data,
+        data: project.data || cloneDefaults(),
       }))
     : [];
 
@@ -88,14 +88,15 @@ function readLocalWorkspace() {
   try {
     const stored = localStorage.getItem(WORKSPACE_STORAGE_KEY);
     if (!stored) return createDefaultWorkspace();
-    return normalizeWorkspace(JSON.parse(stored));
+    return ensureActiveProject(normalizeWorkspace(JSON.parse(stored)));
   } catch (error) {
     return createDefaultWorkspace();
   }
 }
 
 function persistWorkspace(workspace) {
-  localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(workspace));
+  const normalized = ensureActiveProject(normalizeWorkspace(workspace));
+  localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(normalized));
 }
 
 function loadWorkspace() {
@@ -106,13 +107,35 @@ function loadWorkspace() {
 
 function updateWorkspace(mutator) {
   const workspace = loadWorkspace();
-  const nextWorkspace = normalizeWorkspace(mutator(workspace) || workspace);
+  const nextWorkspace = ensureActiveProject(normalizeWorkspace(mutator(workspace) || workspace));
   persistWorkspace(nextWorkspace);
   return nextWorkspace;
 }
 
 function buildProjectId() {
   return `project-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function ensureActiveProject(workspace) {
+  if (!workspace || typeof workspace !== 'object') return createDefaultWorkspace();
+  if (!Array.isArray(workspace.projects) || workspace.projects.length === 0) {
+    return createDefaultWorkspace();
+  }
+
+  const normalizedProjects = workspace.projects.filter((project) => project && typeof project === 'object' && project.id);
+  if (!normalizedProjects.length) return createDefaultWorkspace();
+
+  const activeProjectExists = normalizedProjects.some((project) => project.id === workspace.activeProjectId);
+  return {
+    ...workspace,
+    activeProjectId: activeProjectExists ? workspace.activeProjectId : normalizedProjects[0].id,
+    projects: normalizedProjects.map((project) => ({
+      id: project.id,
+      name: project.name || project.data?.trip?.name || 'Projet voyage',
+      updatedAt: project.updatedAt || new Date().toISOString(),
+      data: project.data || cloneDefaults(),
+    })),
+  };
 }
 
 export function getProjects() {
@@ -200,19 +223,23 @@ export function loadData() {
 
 /** Save active project and trigger authenticated cloud sync */
 export function saveData(data) {
-  const workspace = updateWorkspace((currentWorkspace) => ({
-    ...currentWorkspace,
-    projects: currentWorkspace.projects.map((project) => (
-      project.id === currentWorkspace.activeProjectId
-        ? {
-          ...project,
-          name: data.trip?.name || project.name,
-          updatedAt: new Date().toISOString(),
-          data,
-        }
-        : project
-    )),
-  }));
+  const workspace = updateWorkspace((currentWorkspace) => {
+    const normalizedCurrentWorkspace = ensureActiveProject(currentWorkspace);
+    const activeProjectId = normalizedCurrentWorkspace.activeProjectId;
+    return {
+      ...normalizedCurrentWorkspace,
+      projects: normalizedCurrentWorkspace.projects.map((project) => (
+        project.id === activeProjectId
+          ? {
+            ...project,
+            name: data.trip?.name || project.name,
+            updatedAt: new Date().toISOString(),
+            data,
+          }
+          : project
+      )),
+    };
+  });
 
   void pushWorkspaceToCloud(workspace);
 }
@@ -240,19 +267,23 @@ async function pushWorkspaceToCloud(workspace) {
 
 /** Push current active project data to authenticated cloud workspace */
 export async function pushToCloud(data) {
-  const workspace = updateWorkspace((currentWorkspace) => ({
-    ...currentWorkspace,
-    projects: currentWorkspace.projects.map((project) => (
-      project.id === currentWorkspace.activeProjectId
-        ? {
-          ...project,
-          name: data.trip?.name || project.name,
-          updatedAt: new Date().toISOString(),
-          data,
-        }
-        : project
-    )),
-  }));
+  const workspace = updateWorkspace((currentWorkspace) => {
+    const normalizedCurrentWorkspace = ensureActiveProject(currentWorkspace);
+    const activeProjectId = normalizedCurrentWorkspace.activeProjectId;
+    return {
+      ...normalizedCurrentWorkspace,
+      projects: normalizedCurrentWorkspace.projects.map((project) => (
+        project.id === activeProjectId
+          ? {
+            ...project,
+            name: data.trip?.name || project.name,
+            updatedAt: new Date().toISOString(),
+            data,
+          }
+          : project
+      )),
+    };
+  });
   return pushWorkspaceToCloud(workspace);
 }
 
