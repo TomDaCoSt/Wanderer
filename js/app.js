@@ -12,6 +12,8 @@ import { renderActivities } from './views/activities.js';
 import { renderExpenses   } from './views/expenses.js';
 import { renderDocuments  } from './views/documents.js';
 
+const APP_BUILD = '2026.07.23-1';
+
 // =====================================================
 // APP STATE
 // =====================================================
@@ -44,6 +46,13 @@ const VIEW_RENDERERS = {
   expenses:   renderExpenses,
   documents:  renderDocuments,
 };
+
+function updateVersionBadge() {
+  const versionBadge = document.getElementById('app-version-badge');
+  if (versionBadge) {
+    versionBadge.textContent = `Build ${APP_BUILD}`;
+  }
+}
 
 // =====================================================
 // ROUTER
@@ -123,6 +132,7 @@ async function bootApp() {
   if (appBooted) return;
   appBooted = true;
 
+  updateVersionBadge();
   initTheme();
   initNav();
   navigateTo('dashboard');
@@ -142,7 +152,10 @@ async function bootApp() {
 // APP INIT
 // =====================================================
 async function init() {
+  updateVersionBadge();
   await bootApp();
 }
 
 document.addEventListener('DOMContentLoaded', init);
+
+updateVersionBadge();
