@@ -18,19 +18,14 @@ function getWorkspaceKey() {
 
 /**
  * À appeler au boot après avoir récupéré l'identité de l'utilisateur.
- * Vide le localStorage si un autre utilisateur était connecté avant.
+ * Active le bon espace de stockage pour cet utilisateur.
+ * NE supprime jamais les données — chaque user a sa propre clé isolée.
  */
 export function initUserStorage(userId) {
   if (!userId) return;
-  const prevUserId = localStorage.getItem('wanderer_active_user');
-  if (prevUserId && prevUserId !== userId) {
-    // Nettoyer les données de l'ancien utilisateur
-    localStorage.removeItem(`${WORKSPACE_KEY_PREFIX}_${prevUserId}`);
-    localStorage.removeItem(LEGACY_STORAGE_KEY);
-    console.info('[storage] Ancien utilisateur détecté — données locales nettoyées.');
-  }
   _currentUserId = userId;
   localStorage.setItem('wanderer_active_user', userId);
+  console.info(`[storage] Espace de stockage activé pour l'utilisateur : ${userId.slice(0, 8)}…`);
 }
 
 // =====================================================
@@ -413,10 +408,13 @@ export async function pullFromCloud() {
   try {
     const localWorkspace = readLocalWorkspace();
     const localUpdatedAt = getMostRecentUpdatedAt(localWorkspace);
+    const localActiveProject = localWorkspace.projects.find((p) => p.id === localWorkspace.activeProjectId);
+    const localHasData = hasMeaningfulData(localActiveProject?.data);
 
-    // Envoi de If-Modified-Since pour éviter le download si rien n'a changé
+    // N'envoie If-Modified-Since que si le local a déjà des données
+    // (Sur un nouvel appareil, on veut toujours charger le cloud)
     const headers = {};
-    if (localUpdatedAt) {
+    if (localHasData && localUpdatedAt) {
       headers['If-Modified-Since'] = new Date(localUpdatedAt).toUTCString();
     }
 
@@ -428,7 +426,16 @@ export async function pullFromCloud() {
       return loadData();
     }
 
-    if (!res.ok) return null;
+    // 503 → variables Upstash manquantes sur Vercel
+    if (res.status === 503) {
+      console.error('[sync] ⚠️ Cloud non configuré (variables Upstash manquantes sur Vercel).');
+      return null;
+    }
+
+    if (!res.ok) {
+      console.warn('[sync] Erreur cloud:', res.status);
+      return null;
+    }
 
     const payload = await res.json();
     if (!payload?.workspace) return null;

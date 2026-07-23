@@ -20,11 +20,37 @@ async function readRequestBody(req) {
 }
 
 export default async function handler(req, res) {
+  // Vérification anticipée des variables d'environnement Upstash
+  if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) {
+    console.error('[api/projects] UPSTASH_REDIS_REST_URL ou UPSTASH_REDIS_REST_TOKEN manquant !');
+    return res.status(503).json({
+      error: 'Cloud storage non configuré. Ajoutez UPSTASH_REDIS_REST_URL et UPSTASH_REDIS_REST_TOKEN dans les variables Vercel.',
+    });
+  }
+
   const session = await requireSession(req, res);
   if (!session) return;
 
+  res.setHeader('Cache-Control', 'no-store');
+
   if (req.method === 'GET') {
     const workspace = await loadUserWorkspace(session.sub);
+
+    // Header Last-Modified pour la sync conditionnelle (If-Modified-Since)
+    if (workspace.updatedAt) {
+      res.setHeader('Last-Modified', new Date(workspace.updatedAt).toUTCString());
+    }
+
+    // 304 Not Modified si le client a déjà la version à jour
+    const ifModifiedSince = req.headers['if-modified-since'];
+    if (ifModifiedSince && workspace.updatedAt) {
+      const clientDate = new Date(ifModifiedSince);
+      const serverDate = new Date(workspace.updatedAt);
+      if (!isNaN(clientDate) && serverDate <= clientDate) {
+        return res.status(304).end();
+      }
+    }
+
     return res.status(200).json({ workspace });
   }
 
