@@ -155,6 +155,24 @@ function buildProjectId() {
   return `project-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
+function hasMeaningfulData(data) {
+  if (!data || typeof data !== 'object') return false;
+  if (data.trip?.name) return true;
+  if (data.trip?.startDate || data.trip?.endDate) return true;
+  if (data.settings?.budget > 0) return true;
+  if (Array.isArray(data.cities) && data.cities.length) return true;
+  if (Array.isArray(data.flights) && data.flights.length) return true;
+  if (Array.isArray(data.trains) && data.trains.length) return true;
+  if (Array.isArray(data.accommodations) && data.accommodations.length) return true;
+  if (Array.isArray(data.itinerary) && data.itinerary.length) return true;
+  if (Array.isArray(data.activities) && data.activities.length) return true;
+  if (Array.isArray(data.expenses) && data.expenses.length) return true;
+  if (Array.isArray(data.documents) && data.documents.length) return true;
+  if (Array.isArray(data.emergencyNumbers) && data.emergencyNumbers.length) return true;
+  if (Array.isArray(data.rentals) && data.rentals.length) return true;
+  return false;
+}
+
 function ensureActiveProject(workspace) {
   if (!workspace || typeof workspace !== 'object') return createDefaultWorkspace();
   if (!Array.isArray(workspace.projects) || workspace.projects.length === 0) {
@@ -335,10 +353,19 @@ export async function pullFromCloud() {
     const payload = await res.json();
     if (!payload || !payload.workspace) return null;
 
-    const workspace = normalizeWorkspace(payload.workspace);
-    persistWorkspace(workspace);
-    const activeProject = workspace.projects.find((project) => project.id === workspace.activeProjectId);
-    return activeProject?.data || null;
+    const remoteWorkspace = normalizeWorkspace(payload.workspace);
+    const activeProject = remoteWorkspace.projects.find((project) => project.id === remoteWorkspace.activeProjectId);
+    const remoteData = activeProject?.data || null;
+    const localWorkspace = loadWorkspace();
+    const localActiveProject = localWorkspace.projects.find((project) => project.id === localWorkspace.activeProjectId);
+    const localData = localActiveProject?.data || null;
+
+    if (hasMeaningfulData(localData) && !hasMeaningfulData(remoteData)) {
+      return localData;
+    }
+
+    persistWorkspace(remoteWorkspace);
+    return remoteData;
   } catch (error) {
     console.warn('Cloud workspace pull error:', error);
     return null;
