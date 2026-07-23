@@ -8,12 +8,15 @@ import {
   deleteProject,
   getActiveProjectId,
   getProjects,
+  getSharedProjects,
   pullFromCloud,
   pushToCloud,
   renameProject,
   resetData,
+  revokeShare,
   saveData,
   setActiveProject,
+  shareProject,
 } from '../data.js';
 import { logout } from '../auth.js';
 
@@ -23,6 +26,7 @@ export function renderDashboard(container) {
   const settings = data.settings || {};
   const projects = getProjects();
   const activeProjectId = getActiveProjectId();
+  const sharedProjects = getSharedProjects();
 
   // Countdown
   const today     = new Date();
@@ -126,9 +130,35 @@ export function renderDashboard(container) {
             <button class="btn btn-ghost btn-sm" id="add-project-btn" title="Créer un projet"><i class="fa-solid fa-plus"></i></button>
             <button class="btn btn-ghost btn-sm" id="rename-project-btn" title="Renommer le projet"><i class="fa-solid fa-pen"></i></button>
             <button class="btn btn-ghost btn-sm" id="delete-project-btn" title="Supprimer le projet"><i class="fa-solid fa-trash"></i></button>
+            <button class="btn btn-ghost btn-sm" id="share-project-btn" title="Partager ce voyage" style="color:var(--color-success);border:1px solid rgba(34,197,94,0.3)"><i class="fa-solid fa-user-plus"></i></button>
           </div>
         </div>
       </div>
+
+      <!-- Projets partagés avec moi -->
+      ${sharedProjects.length > 0 ? `
+      <div class="card" style="margin-bottom:var(--sp-4);padding:var(--sp-3) var(--sp-4)">
+        <div style="font-size:var(--fs-xs);font-weight:700;color:var(--text-primary);margin-bottom:0.6rem">👥 Voyages partagés</div>
+        <div style="display:flex;flex-direction:column;gap:0.5rem">
+          ${sharedProjects.map((s) => `
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;padding:0.4rem 0.6rem;background:rgba(99,102,241,0.07);border-radius:8px;border:1px solid rgba(99,102,241,0.18)">
+              <div style="min-width:0;flex:1">
+                <div style="font-size:var(--fs-xs);font-weight:600;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+                  🗺️ ${s.project?.name || 'Voyage partagé'}
+                </div>
+                <div style="font-size:0.66rem;color:var(--text-muted)">
+                  ${s.isOwner ? `Partagé avec ${s.collaborators?.map(c=>c.email).join(', ')}` : `Par ${s.ownerEmail}`}
+                </div>
+              </div>
+              <div style="display:flex;gap:0.3rem;flex-shrink:0">
+                <button class="btn btn-ghost btn-sm shared-load-btn" data-shareid="${s.shareId}" style="font-size:0.7rem;padding:0.2rem 0.5rem" title="Ouvrir ce voyage"><i class="fa-solid fa-folder-open"></i></button>
+                ${s.isOwner ? `<button class="btn btn-ghost btn-sm shared-revoke-btn" data-shareid="${s.shareId}" data-name="${s.project?.name || 'ce voyage'}" style="font-size:0.7rem;padding:0.2rem 0.5rem;color:var(--color-danger)" title="Révoquer le partage"><i class="fa-solid fa-link-slash"></i></button>` : ''}
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+      ` : ''}
 
       <!-- Countdown -->
       ${countdownHtml}
@@ -382,6 +412,79 @@ export function renderDashboard(container) {
       .catch(() => {
         showToast('Échec de la synchronisation cloud.', 'error');
       });
+  });
+
+  // ── Partage — bouton "Partager ce voyage" ───────────────────────────────
+  document.getElementById('share-project-btn')?.addEventListener('click', () => {
+    const activeProject = getProjects().find((p) => p.id === getActiveProjectId());
+    if (!activeProject) return;
+
+    openModal({
+      title: '👥 Partager ce voyage',
+      fields: [
+        {
+          key: 'email',
+          label: 'Email Google du collaborateur',
+          type: 'email',
+          required: true,
+          placeholder: 'ami@gmail.com',
+          hint: 'La personne devra se connecter avec ce compte Google pour accéder au voyage.',
+        },
+      ],
+      data: { email: '' },
+      async onSave(formData) {
+        const email = (formData.email || '').trim().toLowerCase();
+        if (!email) return;
+        showToast('Partage en cours...', 'info');
+        try {
+          await shareProject(activeProject.id, email);
+          rerender();
+          showToast(`Voyage partagé avec ${email} ✓`, 'success');
+        } catch (err) {
+          showToast(err.message || 'Erreur lors du partage.', 'error');
+        }
+      },
+    });
+  });
+
+  // ── Partage — ouvrir un voyage partagé ────────────────────────────────
+  container.querySelectorAll('.shared-load-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const shareId = btn.dataset.shareid;
+      showToast('Chargement du voyage partagé...', 'info');
+      try {
+        const res = await fetch(`/api/share/${shareId}`);
+        if (!res.ok) throw new Error();
+        const { share } = await res.json();
+        if (share?.project?.data) {
+          Object.assign(appData, share.project.data);
+          // Stocker l'shareId actif pour les sauvegardes futures
+          sessionStorage.setItem('active_share_id', shareId);
+          rerender();
+          showToast(`"${share.project.name}" chargé ✓`, 'success');
+        }
+      } catch {
+        showToast('Impossible de charger ce voyage partagé.', 'error');
+      }
+    });
+  });
+
+  // ── Partage — révoquer un partage (owner uniquement) ──────────────────
+  container.querySelectorAll('.shared-revoke-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const shareId = btn.dataset.shareid;
+      const name = btn.dataset.name || 'ce voyage';
+      const ok = await openConfirm(`Arrêter de partager "${name}" ?\nLes collaborateurs n'y auront plus accès.`, 'Révoquer le partage');
+      if (!ok) return;
+      showToast('Révocation en cours...', 'info');
+      const success = await revokeShare(shareId);
+      if (success) {
+        rerender();
+        showToast('Partage révoqué.', 'success');
+      } else {
+        showToast('Erreur lors de la révocation.', 'error');
+      }
+    });
   });
 }
 

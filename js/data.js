@@ -3,8 +3,35 @@
    Japan Travel Dashboard
    ===================================================== */
 
-const WORKSPACE_STORAGE_KEY = 'voyage_workspace_v1';
+// Clé dynamique par utilisateur — isole les données entre comptes sur le même navigateur
+const WORKSPACE_KEY_PREFIX = 'voyage_workspace_v1';
 const LEGACY_STORAGE_KEY = 'voyage_japon_data';
+
+// userId de l'utilisateur actuellement connecté (initialisé au boot via initUserStorage)
+let _currentUserId = null;
+
+function getWorkspaceKey() {
+  return _currentUserId
+    ? `${WORKSPACE_KEY_PREFIX}_${_currentUserId}`
+    : WORKSPACE_KEY_PREFIX;
+}
+
+/**
+ * À appeler au boot après avoir récupéré l'identité de l'utilisateur.
+ * Vide le localStorage si un autre utilisateur était connecté avant.
+ */
+export function initUserStorage(userId) {
+  if (!userId) return;
+  const prevUserId = localStorage.getItem('wanderer_active_user');
+  if (prevUserId && prevUserId !== userId) {
+    // Nettoyer les données de l'ancien utilisateur
+    localStorage.removeItem(`${WORKSPACE_KEY_PREFIX}_${prevUserId}`);
+    localStorage.removeItem(LEGACY_STORAGE_KEY);
+    console.info('[storage] Ancien utilisateur détecté — données locales nettoyées.');
+  }
+  _currentUserId = userId;
+  localStorage.setItem('wanderer_active_user', userId);
+}
 
 // =====================================================
 // DEFAULT SAMPLE DATA
@@ -114,7 +141,7 @@ function migrateLegacyData() {
 
 function readLocalWorkspace() {
   try {
-    const stored = localStorage.getItem(WORKSPACE_STORAGE_KEY);
+    const stored = localStorage.getItem(getWorkspaceKey());
     if (!stored) {
       const migrated = migrateLegacyData();
       if (migrated) return ensureActiveProject(normalizeWorkspace(migrated));
@@ -132,7 +159,7 @@ function persistWorkspace(workspace) {
   const normalized = ensureActiveProject(normalizeWorkspace(workspace));
   const activeProject = normalized.projects.find((project) => project.id === normalized.activeProjectId);
 
-  localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(normalized));
+  localStorage.setItem(getWorkspaceKey(), JSON.stringify(normalized));
   if (activeProject) {
     localStorage.setItem(LEGACY_STORAGE_KEY, JSON.stringify(activeProject.data));
   }
@@ -298,7 +325,14 @@ export function saveData(data) {
     };
   });
 
+  // Sync workspace privé
   void pushWorkspaceToCloud(workspace);
+
+  // Si un projet partagé est actif, propager les modifications aux collaborateurs
+  const activeShareId = sessionStorage.getItem('active_share_id');
+  if (activeShareId) {
+    void updateSharedProject(activeShareId, data);
+  }
 }
 
 /** Reset active project to default data */
@@ -512,3 +546,111 @@ export function deleteItineraryEvent(data, date, eventId) {
   if (day) day.events = day.events.filter(e => e.id !== eventId);
   saveData(data);
 }
+
+// =====================================================
+// PARTAGE DE VOYAGES — Cloud Share API
+// =====================================================
+
+const SHARED_STORAGE_KEY_PREFIX = 'voyage_shared_v1';
+
+function getSharedStorageKey() {
+  return _currentUserId
+    ? `${SHARED_STORAGE_KEY_PREFIX}_${_currentUserId}`
+    : SHARED_STORAGE_KEY_PREFIX;
+}
+
+/** Lit les projets partagés depuis le localStorage local */
+export function getSharedProjects() {
+  try {
+    const raw = localStorage.getItem(getSharedStorageKey());
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistSharedProjects(sharedProjects) {
+  localStorage.setItem(getSharedStorageKey(), JSON.stringify(sharedProjects));
+}
+
+/**
+ * Crée un partage : envoie le projet courant au cloud et invite un collaborateur par email.
+ * @param {string} projectId - ID du projet à partager
+ * @param {string} inviteeEmail - email de la personne invitée
+ * @returns {Promise<{shareId: string}|null>}
+ */
+export async function shareProject(projectId, inviteeEmail) {
+  const workspace = loadWorkspace();
+  const project = workspace.projects.find((p) => p.id === projectId);
+  if (!project) return null;
+
+  try {
+    const res = await fetch('/api/share', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId, project, inviteeEmail }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `Erreur ${res.status}`);
+    }
+    return await res.json();
+  } catch (error) {
+    console.error('[share] shareProject error:', error);
+    throw error;
+  }
+}
+
+/**
+ * Met à jour un projet partagé (last-write-wins).
+ */
+export async function updateSharedProject(shareId, projectData) {
+  try {
+    const res = await fetch(`/api/share/${shareId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data: projectData }),
+    });
+    return res.ok;
+  } catch (error) {
+    console.warn('[share] updateSharedProject error:', error);
+    return false;
+  }
+}
+
+/**
+ * Révoque un partage (seul le propriétaire peut supprimer).
+ */
+export async function revokeShare(shareId) {
+  try {
+    const res = await fetch(`/api/share/${shareId}`, { method: 'DELETE' });
+    if (res.ok) {
+      persistSharedProjects(getSharedProjects().filter((s) => s.shareId !== shareId));
+    }
+    return res.ok;
+  } catch (error) {
+    console.warn('[share] revokeShare error:', error);
+    return false;
+  }
+}
+
+/**
+ * Tire tous les projets partagés accessibles depuis le cloud.
+ * Met à jour le cache local et retourne la liste.
+ */
+export async function pullSharedProjects() {
+  try {
+    const res = await fetch('/api/share', { method: 'GET' });
+    if (!res.ok) return getSharedProjects();
+    const payload = await res.json();
+    const shared = Array.isArray(payload.shares) ? payload.shares : [];
+    persistSharedProjects(shared);
+    return shared;
+  } catch (error) {
+    console.warn('[share] pullSharedProjects error:', error);
+    return getSharedProjects();
+  }
+}
+

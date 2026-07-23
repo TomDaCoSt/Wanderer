@@ -3,7 +3,7 @@
    Japan Travel Dashboard
    ===================================================== */
 
-import { loadData, saveData, pullFromCloud } from './data.js';
+import { loadData, saveData, pullFromCloud, pullSharedProjects, initUserStorage } from './data.js';
 import { getCurrentUser, refreshCurrentUser } from './auth.js';
 import { renderDashboard  } from './views/dashboard.js';
 import { renderFlights    } from './views/flights.js';
@@ -148,31 +148,36 @@ async function bootApp() {
     return;
   }
 
+  // 2. Initialiser le stockage local pour CET utilisateur (isolation multi-comptes)
+  initUserStorage(user.sub);
+  appData = loadData(); // Recharger après initUserStorage
+
   updateVersionBadge();
   initTheme();
   initNav();
 
-  // 2. Afficher un loader pendant la sync cloud initiale
+  // 3. Afficher un loader pendant la sync cloud initiale
   showSyncLoader();
 
   try {
-    // 3. Pull cloud EN PREMIER, avant le rendu initial
-    const cloudData = await pullFromCloud();
+    // 4. Pull cloud + projets partagés EN PREMIER, avant le rendu initial
+    const [cloudData] = await Promise.all([
+      pullFromCloud(),
+      pullSharedProjects(),
+    ]);
     if (cloudData) {
       Object.assign(appData, cloudData);
-      // persistWorkspace() est déjà appelé dans pullFromCloud()
     }
   } catch (e) {
     console.warn('[boot] Initial cloud sync failed:', e);
-    // Continuer avec les données locales si le cloud est inaccessible
   } finally {
     hideSyncLoader();
   }
 
-  // 4. Rendu final avec les données fraîches (cloud ou local)
+  // 5. Rendu final avec les données fraîches
   navigateTo('dashboard');
 
-  // 5. Re-sync automatique quand l'utilisateur revient sur l'onglet
+  // 6. Re-sync automatique quand l'utilisateur revient sur l'onglet
   setupVisibilitySync();
 }
 
@@ -221,7 +226,7 @@ function hideSyncLoader() {
 /** Re-sync en arrière-plan quand l'utilisateur revient sur l'onglet */
 function setupVisibilitySync() {
   let lastSyncAt = Date.now();
-  const MIN_SYNC_INTERVAL_MS = 30_000; // 30 secondes minimum entre deux syncs automatiques
+  const MIN_SYNC_INTERVAL_MS = 30_000;
 
   document.addEventListener('visibilitychange', async () => {
     if (document.visibilityState !== 'visible') return;
@@ -231,18 +236,21 @@ function setupVisibilitySync() {
     lastSyncAt = now;
 
     try {
-      const cloudData = await pullFromCloud();
+      // Sync privé + partagé en parallèle
+      const [cloudData] = await Promise.all([
+        pullFromCloud(),
+        pullSharedProjects(),
+      ]);
       if (cloudData) {
         const prevJson = JSON.stringify(appData);
         Object.assign(appData, cloudData);
-        // Re-render seulement si les données ont réellement changé
         if (JSON.stringify(appData) !== prevJson) {
           console.info('[sync] Nouvelles données cloud détectées → mise à jour de l\'affichage');
           rerender();
         }
       }
     } catch (e) {
-      // Silencieux — ne pas perturber l'utilisateur avec une erreur de sync en arrière-plan
+      // Silencieux
     }
   });
 }
