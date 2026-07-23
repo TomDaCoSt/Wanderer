@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="fr" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="description" content="Tableau de bord voyage au Japon — Vols, hébergements, itinéraire, activités, budget et documents." />
+  <title>🇯🇵 Voyage Japon</title>
+
+  <!-- PWA -->
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#e94560" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Voyage Japon" />
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+
+  <!-- Font Awesome -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous" />
+
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+
+  <!-- App CSS -->
+  <link rel="stylesheet" href="css/main.css" />
+  <link rel="stylesheet" href="css/components.css" />
+  <link rel="stylesheet" href="css/layout.css" />
+</head>
+<body>
+
+  <!-- ===== APP HEADER ===== -->
+  <header class="app-header" id="app-header">
+    <div class="header-brand">
+      <span class="header-flag">🇯🇵</span>
+      <div class="header-text">
+        <span class="header-view-name" id="header-view-name">Dashboard</span>
+        <span class="header-trip-name" id="header-trip-name">Voyage Japon</span>
+      </div>
+    </div>
+    <div class="header-actions">
+      <button class="btn-icon" id="theme-toggle" aria-label="Changer le thème" title="Dark / Light">
+        <i class="fa-solid fa-moon" id="theme-icon"></i>
+      </button>
+    </div>
+  </header>
+
+  <!-- ===== MAIN CONTENT ===== -->
+  <main class="app-main" id="app-main">
+    <div id="view-container" class="view-container"></div>
+  </main>
+
+  <!-- ===== BOTTOM NAVIGATION ===== -->
+  <nav class="bottom-nav" id="bottom-nav" role="navigation" aria-label="Navigation principale">
+    <button class="nav-item active" data-view="dashboard" aria-label="Accueil">
+      <span class="nav-icon"><i class="fa-solid fa-house"></i></span>
+      <span class="nav-label">Accueil</span>
+    </button>
+    <button class="nav-item" data-view="flights" aria-label="Transports (Vols, Trains, Voiture)">
+      <span class="nav-icon"><i class="fa-solid fa-plane-up"></i></span>
+      <span class="nav-label">Transports</span>
+    </button>
+    <button class="nav-item" data-view="map" aria-label="Carte interactive">
+      <span class="nav-icon"><i class="fa-solid fa-map-location-dot"></i></span>
+      <span class="nav-label">Carte</span>
+    </button>
+    <button class="nav-item" data-view="itinerary" aria-label="Planning jour par jour">
+      <span class="nav-icon"><i class="fa-solid fa-calendar-days"></i></span>
+      <span class="nav-label">Planning</span>
+    </button>
+    <button class="nav-item" data-view="activities" aria-label="Activités par ville">
+      <span class="nav-icon"><i class="fa-solid fa-star"></i></span>
+      <span class="nav-label">Activités</span>
+    </button>
+    <button class="nav-item" data-view="expenses" aria-label="Budget et dépenses">
+      <span class="nav-icon"><i class="fa-solid fa-yen-sign"></i></span>
+      <span class="nav-label">Budget</span>
+    </button>
+    <button class="nav-item" data-view="documents" aria-label="Documents et QR codes">
+      <span class="nav-icon"><i class="fa-solid fa-folder-open"></i></span>
+      <span class="nav-label">Docs</span>
+    </button>
+  </nav>
+
+  <!-- ===== GLOBAL CRUD MODAL ===== -->
+  <div class="modal-backdrop" id="modal-backdrop">
+    <div class="modal-box" id="modal-box">
+      <div class="modal-header-bar">
+        <h2 class="modal-heading" id="modal-heading">Titre</h2>
+        <button class="btn-icon" id="modal-close-btn" aria-label="Fermer le modal">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <div class="modal-content-area" id="modal-content-area"></div>
+      <div class="modal-footer-bar" id="modal-footer-bar">
+        <button class="btn btn-danger-outline" id="modal-delete-btn" style="display:none">
+          <i class="fa-solid fa-trash"></i> Supprimer
+        </button>
+        <div style="flex:1"></div>
+        <button class="btn btn-ghost" id="modal-cancel-btn">Annuler</button>
+        <button class="btn btn-primary" id="modal-save-btn">
+          <i class="fa-solid fa-check"></i> Enregistrer
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== CONFIRM DIALOG ===== -->
+  <div class="modal-backdrop modal-backdrop-sm" id="confirm-backdrop">
+    <div class="modal-box modal-box-sm" id="confirm-box">
+      <div class="modal-header-bar">
+        <h2 class="modal-heading" id="confirm-heading">Confirmation</h2>
+      </div>
+      <div class="modal-content-area">
+        <p id="confirm-message" style="color: var(--text-secondary); padding: 0 0 0.5rem;">Êtes-vous sûr de vouloir supprimer cet élément ?</p>
+      </div>
+      <div class="modal-footer-bar">
+        <div style="flex:1"></div>
+        <button class="btn btn-ghost" id="confirm-cancel-btn">Annuler</button>
+        <button class="btn btn-danger" id="confirm-ok-btn">
+          <i class="fa-solid fa-trash"></i> Supprimer
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== TOAST STACK ===== -->
+  <div class="toast-stack" id="toast-stack" aria-live="polite" aria-atomic="false"></div>
+
+  <!-- External CDN Libraries (loaded before ES modules) -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js" crossorigin="anonymous"></script>
+
+  <!-- App Entry Point -->
+  <script type="module" src="js/app.js"></script>
+
+  <!-- PWA Service Worker -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js').catch(() => {});
+      });
+    }
+  </script>
+</body>
+</html>
