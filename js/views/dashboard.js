@@ -96,10 +96,13 @@ export function renderDashboard(container) {
           <div class="view-hd-title">${trip.name||'Mon Voyage'}</div>
           <div class="view-hd-sub">${trip.startDate ? formatDate(trip.startDate) : ''}${trip.endDate?' → '+formatDate(trip.endDate):''}</div>
         </div>
-        <div style="display:flex;gap:var(--sp-2)">
+        <div style="display:flex;gap:var(--sp-2);flex-wrap:wrap">
           <button class="btn btn-ghost btn-sm" id="save-project-btn" title="Sauvegarder immédiatement"><i class="fa-solid fa-floppy-disk"></i> Sauver</button>
           <button class="btn btn-ghost btn-sm" id="edit-trip-btn"><i class="fa-solid fa-pen"></i> Modifier</button>
-          <button class="btn btn-ghost btn-sm" id="reset-data-btn" title="Recharger les données par défaut"><i class="fa-solid fa-rotate"></i> Reset</button>
+          <button class="btn btn-ghost btn-sm" id="export-json-btn" title="Exporter les données en JSON" style="color:var(--color-info);border:1px solid rgba(59,130,246,0.3)"><i class="fa-solid fa-file-export"></i> Export</button>
+          <button class="btn btn-ghost btn-sm" id="import-json-btn" title="Importer des données depuis un fichier JSON" style="color:var(--color-success);border:1px solid rgba(34,197,94,0.3)"><i class="fa-solid fa-file-import"></i> Import</button>
+          <input type="file" id="import-json-input" accept=".json,application/json" style="display:none">
+          <button class="btn btn-ghost btn-sm" id="reset-data-btn" title="Réinitialiser les données"><i class="fa-solid fa-rotate"></i> Reset</button>
         </div>
       </div>
 
@@ -319,6 +322,58 @@ export function renderDashboard(container) {
   document.getElementById('save-project-btn')?.addEventListener('click', () => {
     commitData();
     showToast('Projet sauvegardé.', 'success');
+  });
+
+  // Export JSON
+  document.getElementById('export-json-btn')?.addEventListener('click', () => {
+    const jsonStr = JSON.stringify(appData, null, 2);
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const safeName = (appData.trip?.name || 'export').replace(/[^a-z0-9]/gi, '_').toLowerCase();
+    const dateStr = new Date().toISOString().slice(0, 10);
+    a.href = url;
+    a.download = `voyage_${safeName}_${dateStr}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('Données exportées au format JSON 📄', 'success');
+  });
+
+  // Import JSON
+  const importInput = document.getElementById('import-json-input');
+  document.getElementById('import-json-btn')?.addEventListener('click', () => {
+    importInput?.click();
+  });
+
+  importInput?.addEventListener('change', (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const importedData = JSON.parse(event.target.result);
+        if (!importedData || typeof importedData !== 'object') {
+          throw new Error('Fichier JSON invalide');
+        }
+
+        const ok = await openConfirm(`Importer les données depuis "${file.name}" ? Cela remplacera les données actuelles du projet actif.`, 'Importation JSON');
+        if (!ok) {
+          importInput.value = '';
+          return;
+        }
+
+        saveData(importedData);
+        Object.assign(appData, importedData);
+        rerender();
+        showToast('Données importées et synchronisées ! 🚀', 'success');
+      } catch (err) {
+        showToast('Erreur lors de l\'importation du fichier JSON.', 'error');
+      } finally {
+        importInput.value = '';
+      }
+    };
+    reader.readAsText(file);
   });
 
   // Reset data button
